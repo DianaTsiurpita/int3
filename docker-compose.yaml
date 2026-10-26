@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orders}
+      POSTGRES_DB: ${POSTGRES_DB:-orders}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  forecast-api:
+    build:
+      context: .
+      dockerfile: forecast-service/Dockerfile
+    environment:
+      MODEL_VERSION: ${MODEL_VERSION:-v0.1.0}
+    # Only accessible to services on the Compose network; no host ports.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8001/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  orders-api:
+    build:
+      context: .
+      dockerfile: orders-service/Dockerfile
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orders}
+      POSTGRES_DB: ${POSTGRES_DB:-orders}
+      POSTGRES_HOST: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      FORECAST_URL: http://forecast-api:8001
+      FORECAST_TIMEOUT: ${FORECAST_TIMEOUT:-3.0}
+      BATCH_MAX_ITEMS: ${BATCH_MAX_ITEMS:-50}
+    secrets:
+      - postgres_password
+      - jwt_secret
+    ports:
+      - "${ORDERS_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      forecast-api:
+        condition: service_healthy
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
+
+volumes:
+  pgdata:
